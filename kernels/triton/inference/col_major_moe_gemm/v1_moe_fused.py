@@ -1,9 +1,3 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# All rights reserved.
-#
-# This source code is licensed under the BSD-style license found in the
-# LICENSE file in the root directory of this source tree.
-
 """Fused MoE kernel."""
 import torch
 import triton
@@ -15,10 +9,10 @@ import json
 import os
 
 @triton.jit()
-def swizzle_tile(pid,
+def grouped_launch(pid,
                 m, n,
                 block_m: tl.constexpr, block_n: tl.constexpr, group_m: tl.constexpr):
-
+    
     grid_m = tl.cdiv(m, block_m)
     grid_n = tl.cdiv(n, block_n)
 
@@ -28,36 +22,6 @@ def swizzle_tile(pid,
 
     pid_m = group_id * group_m + (pid % group_size)
     pid_n = (pid % width) // group_size
-
-    return pid_m, pid_n
-
-
-@triton.jit()
-def row_major(pid,
-                m, n, num_tokens_post_padded,
-                block_m: tl.constexpr, block_n: tl.constexpr):
-
-    grid_n = tl.cdiv(n, block_n)
-
-    pid_m_max = (num_tokens_post_padded // block_m) * 2
-
-    pid_m = (pid // grid_n) % pid_m_max
-    pid_n = pid % grid_n
-
-    return pid_m, pid_n
-
-@triton.jit()
-def col_major(pid,
-              m, n, num_tokens_post_padded,
-              block_m: tl.constexpr, block_n: tl.constexpr):
-
-    grid_m = tl.cdiv(m, block_m)
-    grid_n = tl.cdiv(n, block_n)
-
-    pid_m_max = (num_tokens_post_padded // block_m) * 2
-
-    pid_m = (pid % grid_n) % pid_m_max
-    pid_n = pid // grid_m
 
     return pid_m, pid_n
 
@@ -114,7 +78,7 @@ def fused_moe_kernel_splitk(
     # -----------------------------------------------------------
     # Map program ids `pid` to the block of C it should compute.
     # This is done in a grouped ordering to promote L2 data reuse.
-
+    
     # Scheduling Problem
 
     pid = tl.program_id(axis=0)
@@ -122,27 +86,21 @@ def fused_moe_kernel_splitk(
 
     num_tokens_post_padded = tl.load(num_tokens_post_padded_ptr)
 
-    # print("num_tokens_post_padded: ", num_tokens_post_padded)
-
-    pid_m, pid_n = col_major(pid,
-                             EM, N, num_tokens_post_padded,
-                             block_m, block_n)
-
-    # pid_m, pid_n = swizzle_tile(pid,
-    #                             EM, N,
-    #                             block_m, block_n, group_m)
+    pid_m, pid_n = grouped_launch(pid,
+                                  EM, N,
+                                  block_m, block_n, group_m)
+    
 
     total_blocks_k = tl.cdiv(K, block_k*split_k)
 
-    # num_tokens_post_padded = tl.load(num_tokens_post_padded_ptr)
-
+    num_tokens_post_padded = tl.load(num_tokens_post_padded_ptr)
     if pid_m * block_m >= num_tokens_post_padded:
         return
-
+    
     offs_token_id = pid_m * block_m + tl.arange(0, block_m)
     offs_token = tl.load(sorted_token_ids_ptr + offs_token_id)
     token_mask = offs_token < num_valid_tokens
-
+    
     offs_bn = (pid_n * block_n + tl.arange(0, block_n)) % N
     offs_k = pid_k*block_k + tl.arange(0, block_k)
     a_ptrs = a_ptr + (offs_token[:, None] // top_k * stride_am + offs_k[None, :] * stride_ak)
@@ -158,8 +116,9 @@ def fused_moe_kernel_splitk(
         b = tl.load(b_ptrs,
                     mask=offs_k[:, None] < K - k * (block_k * split_k),
                     other=0.0)
+        
         # We accumulate along the K dimension.
-        accumulator += tl.dot(a, b)
+        accumulator += tl.dot(a.to(tl.fl), b)
         # Advance the ptrs to the next K block.
         a_ptrs += block_k * stride_ak * split_k
         b_ptrs += block_k * stride_bk * split_k
@@ -195,7 +154,7 @@ def moe_align_block_size(
     - expert_ids: A tensor indicating the assigned expert index for each block.
     - num_tokens_post_padded: The total number of tokens after padding, ensuring divisibility by block_size.
 
-    This function pads the number of tokens that each expert needs to process so that it is divisible by block_size.
+    This function pads the number of tokens that each expert needs to process so that it is divisible by block_size. 
     Padding ensures that during block matrix multiplication, the dimensions align correctly.
 
     Example:
@@ -204,7 +163,7 @@ def moe_align_block_size(
     - As block_size is 4, we pad 1 token for each expert.
     - First, flatten topk_ids to [2, 3, 4, 1, 2, 4, 1, 3, 4, 1, 2, 3].
     - Then append padding tokens [12, 12, 12, 12] for each block.
-    - After sorting by expert index, we obtain token_ids [3, 6, 9, 12, 0, 4, 10, 12, 1, 7, 11, 12, 2, 5, 8, 12].
+    - After sorting by expert index, we obtain token_ids [3, 6, 9, 12, 0, 4, 10, 12, 1, 7, 11, 12, 2, 5, 8, 12]. 
         Tokens 12 are non-existent (padding) and are ignored in the subsequent matrix multiplication.
     - The padding ensures that the total number of tokens is now divisible by block_size for proper block matrix operations.
     """
@@ -233,7 +192,7 @@ def invoke_fused_moe_kernel(A: torch.Tensor, B: torch.Tensor, C: torch.Tensor,
 
     N = B.shape[1] # 14336
     K = B.shape[2] # 4096
-    EM = sorted_token_ids.shape[0] # 124
+    EM = sorted_token_ids.shape[0] # 124 
 
     grid = lambda META: (triton.cdiv(EM, META['block_m']) * triton.cdiv(N, META['block_n']), META['split_k'])
 
@@ -286,7 +245,7 @@ def fused_moe(hidden_states: torch.Tensor,
               inplace=False):
     """
     This function computes a Mixture of Experts (MoE) layer using two sets of weights, w1 and w2, and top-k gating mechanism.
-
+    
     Parameters:
     - hidden_states (torch.Tensor): The input tensor to the MoE layer.
     - w1 (torch.Tensor): The first set of expert weights.
@@ -294,7 +253,7 @@ def fused_moe(hidden_states: torch.Tensor,
     - topk_weights (torch.Tensor): The weights for the top-k selected experts.
     - topk_ids (torch.Tensor): The indices of the top-k selected experts.
     - inplace (bool): If True, perform the operation in-place. Defaults to False.
-
+    
     Returns:
     - torch.Tensor: The output tensor after applying the MoE layer.
     """
@@ -312,17 +271,17 @@ def fused_moe(hidden_states: torch.Tensor,
     config_w1 = {
         'block_m': 32,
         'block_n': 64,
-        'block_k': 64,
+        'block_k': 128,
         'group_m': 8,
         'split_k': 2,
     }
-
+    
     config_w2 = {
         'block_m': 32,
-        'block_n': 64,
+        'block_n': 128,
         'block_k': 64,
         'group_m': 8,
-        'split_k': 2,
+        'split_k': 4,
     }
 
     # Decoding
@@ -334,7 +293,7 @@ def fused_moe(hidden_states: torch.Tensor,
             'group_m': 8,
             'split_k' : 2,
         }
-
+        
         config_w2 = {
             'block_m': 16,
             'block_n': 128,
@@ -342,7 +301,7 @@ def fused_moe(hidden_states: torch.Tensor,
             'group_m': 8,
             'split_k': 4,
         }
-
+    
     intermediate_cache1 = torch.zeros((M, topk_ids.shape[1], N),
                                       device=hidden_states.device,
                                       dtype=hidden_states.dtype)
@@ -352,27 +311,28 @@ def fused_moe(hidden_states: torch.Tensor,
     intermediate_cache3 = torch.zeros((M, topk_ids.shape[1], w2.shape[1]),
                                       device=hidden_states.device,
                                       dtype=hidden_states.dtype)
-
+    
     sorted_token_ids, expert_ids, num_tokens_post_padded = moe_align_block_size(
         topk_ids, config_w1['block_m'], E)
-
+    
     invoke_fused_moe_kernel(hidden_states, w1, intermediate_cache1,
                             topk_weights, topk_ids, sorted_token_ids,
                             expert_ids, num_tokens_post_padded, False,
                             topk_ids.shape[1], config_w1)
-
-
+    
+    
     ops.silu_and_mul(intermediate_cache2, intermediate_cache1.view(-1, N))
 
     invoke_fused_moe_kernel(intermediate_cache2, w2, intermediate_cache3,
                             topk_weights, topk_ids, sorted_token_ids,
                             expert_ids, num_tokens_post_padded, True, 1,
                             config_w2)
-
+    
     if inplace:
         return torch.sum(intermediate_cache3.view(*intermediate_cache3.shape),
                          dim=1,
                          out=hidden_states)
-
+    
     return torch.sum(intermediate_cache3.view(*intermediate_cache3.shape),
                      dim=1)
+
