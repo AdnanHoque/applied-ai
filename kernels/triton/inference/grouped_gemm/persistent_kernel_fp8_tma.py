@@ -30,7 +30,7 @@ def _compute_pid(tile_id, num_pid_in_group, num_pid_m, super_group_m):
 def _kernel_grouped_gemm_persistent_fp8_rowwise(
     # Pointers to matrices
     a_desc_ptr,
-    b_desc_ptr,
+    b_ptr,
     c_desc_ptr,
     # Pointer to indices array
     indices_ptr,
@@ -88,8 +88,6 @@ def _kernel_grouped_gemm_persistent_fp8_rowwise(
                     # Determine the expert group index and load expert ID
                     group_idx = m_start // GROUP_SIZE_M
                     expert_idx = tl.load(indices_ptr + group_idx * GROUP_SIZE_M)
-                    expert_offset = expert_idx * N * K
-                    expert_start = n_start + expert_offset
 
                     # Load activations (A) with TMA
                     a = tl._experimental_descriptor_load(
@@ -99,10 +97,21 @@ def _kernel_grouped_gemm_persistent_fp8_rowwise(
                          tl.float8e4nv
                     )
 
+                    # Device side tensor creation to handle dynamic expert access
+                    b_desc_ptr_tile = workspace + start_pid * TMA_SIZE 
+                    tl.extra.cuda.experimental_device_tensormap_create2d(
+                        desc_ptr=b_desc_ptr_tile,
+                        global_address=b_ptr + expert_idx*N*K + n_start*K,
+                        load_size=[BLOCK_SIZE_N, BLOCK_SIZE_K],
+                        global_size=[NUM_EXPERTS*N, K],
+                        element_ty=tl.float8e4nv,
+                    )
+                    tl.extra.cuda.experimental_tensormap_fenceproxy_acquire(b_desc_ptr_tile)
+
                     # Load expert weights (B) for the expert assigned to this block
                     b = tl._experimental_descriptor_load(
-                         b_desc_ptr,
-                         [expert_start, k_offset],
+                         b_desc_ptr_tile,
+                         [0, k_offset],
                          [BLOCK_SIZE_N, BLOCK_SIZE_K],
                          tl.float8e4nv,
                     )
@@ -237,7 +246,7 @@ def _grouped_gemm_persistent(
         desc_helper.fill_2d_tma_descriptor(
             "w",
             w.data_ptr(),
-            N,
+            num_experts*N,
             K,
             META["BLOCK_SIZE_N"],
             META["BLOCK_SIZE_K"],
@@ -269,7 +278,7 @@ def _grouped_gemm_persistent(
     # Launch kernel
     _kernel_grouped_gemm_persistent_fp8_rowwise[grid](
         desc_x,
-        desc_w,
+        w,
         desc_c,
         expert_indices,
         x_scale,
