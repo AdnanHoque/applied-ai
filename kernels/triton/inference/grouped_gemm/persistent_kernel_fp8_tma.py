@@ -79,15 +79,26 @@ def _kernel_grouped_gemm_persistent_fp8_rowwise(
             # Only process if in bounds
             if m_start < M_TOTAL:
 
+                # Determine the expert group index and load expert ID
+                group_idx = m_start // GROUP_SIZE_M
+                expert_idx = tl.load(indices_ptr + group_idx * GROUP_SIZE_M)
+
+                # Device side tensor creation to handle dynamic expert access
+                b_desc_ptr_tile = workspace + start_pid * TMA_SIZE 
+                tl.extra.cuda.experimental_device_tensormap_create2d(
+                    desc_ptr=b_desc_ptr_tile,
+                    global_address=b_ptr + expert_idx*N*K + n_start*K,
+                    load_size=[BLOCK_SIZE_N, BLOCK_SIZE_K],
+                    global_size=[NUM_EXPERTS*N, K],
+                    element_ty=tl.float8e4nv,
+                )
+                tl.extra.cuda.experimental_tensormap_fenceproxy_acquire(b_desc_ptr_tile)
+
 
                 accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
                 for ki in range(k_tiles):
 
                     k_offset = ki * BLOCK_SIZE_K
-
-                    # Determine the expert group index and load expert ID
-                    group_idx = m_start // GROUP_SIZE_M
-                    expert_idx = tl.load(indices_ptr + group_idx * GROUP_SIZE_M)
 
                     # Load activations (A) with TMA
                     a = tl._experimental_descriptor_load(
@@ -96,17 +107,6 @@ def _kernel_grouped_gemm_persistent_fp8_rowwise(
                          [BLOCK_SIZE_M, BLOCK_SIZE_K],
                          tl.float8e4nv
                     )
-
-                    # Device side tensor creation to handle dynamic expert access
-                    b_desc_ptr_tile = workspace + start_pid * TMA_SIZE 
-                    tl.extra.cuda.experimental_device_tensormap_create2d(
-                        desc_ptr=b_desc_ptr_tile,
-                        global_address=b_ptr + expert_idx*N*K + n_start*K,
-                        load_size=[BLOCK_SIZE_N, BLOCK_SIZE_K],
-                        global_size=[NUM_EXPERTS*N, K],
-                        element_ty=tl.float8e4nv,
-                    )
-                    tl.extra.cuda.experimental_tensormap_fenceproxy_acquire(b_desc_ptr_tile)
 
                     # Load expert weights (B) for the expert assigned to this block
                     b = tl._experimental_descriptor_load(
