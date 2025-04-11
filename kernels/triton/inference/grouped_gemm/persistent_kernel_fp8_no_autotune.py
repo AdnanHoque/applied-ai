@@ -13,12 +13,6 @@ def _compute_pid(tile_id, num_pid_in_group, num_pid_m, super_group_m):
     pid_n = (tile_id % num_pid_in_group) // group_size_m
     return pid_m, pid_n
 
-
-@triton.autotune(
-    configs=STANDARD_CONFIGS,
-    key=["M_TOTAL", "N", "K"],
-    prune_configs_by={"early_config_prune": early_config_prune},
-)
 @triton.jit
 def _kernel_grouped_gemm_persistent_fp8_rowwise(
     # Pointers to matrices
@@ -44,7 +38,7 @@ def _kernel_grouped_gemm_persistent_fp8_rowwise(
     # NUM_CONSUMER_GROUPS: tl.constexpr,
     # Group size (for aligned loads)
     GROUP_SIZE_M: tl.constexpr = 128,
-    SUPER_GROUP_M: tl.constexpr = 32, # 32 works best
+    SUPER_GROUP_M: tl.constexpr = 32,
 ):
     """
     Contiguous Grouped GEMM kernel forward.
@@ -205,6 +199,11 @@ def _grouped_gemm_persistent(
         NUM_EXPERTS=num_experts,
         GROUP_SIZE_M=group_size_m,
         NUM_SMS=NUM_SMS,
+        BLOCK_SIZE_M=128,
+        BLOCK_SIZE_N=128,
+        BLOCK_SIZE_K=128,
+        num_warps=8,
+        num_stages=4,
     )
 
     return output

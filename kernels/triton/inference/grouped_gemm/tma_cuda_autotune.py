@@ -227,6 +227,31 @@ STANDARD_CONFIGS = [
         num_stages=4,
         num_warps=8,
     ),
+    triton.Config(
+        {"BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 128, "BLOCK_SIZE_K": 128},
+        num_stages=4,
+        num_warps=8,
+    ),
+    triton.Config(
+        {"BLOCK_SIZE_M": 256, "BLOCK_SIZE_N": 128, "BLOCK_SIZE_K": 128},
+        num_stages=4,
+        num_warps=8,
+    ),
+    triton.Config(
+        {"BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 256, "BLOCK_SIZE_K": 128},
+        num_stages=4,
+        num_warps=8,
+    ),
+    triton.Config(
+        {"BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 128, "BLOCK_SIZE_K": 256},
+        num_stages=4,
+        num_warps=8,
+    ),
+    triton.Config(
+        {"BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 128, "BLOCK_SIZE_K": 256},
+        num_stages=4,
+        num_warps=8,
+    ),
 ]
 
 

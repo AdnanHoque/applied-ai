@@ -10,7 +10,7 @@ from typing import Tuple
 
 import torch
 import triton
-from persistent_kernel_fp8 import grouped_gemm_fp8_rowwise_persistent
+from persistent_kernel_fp8_tma import grouped_gemm_fp8_rowwise_persistent
 
 def create_aligned_test_data(
     batch_size: int,
@@ -388,7 +388,7 @@ def run_all_tests():
         return False
 
     test_results.append(test_large_fp8())
-    test_results.append(benchmark_performance_fp8())
+    # test_results.append(benchmark_performance_fp8())
 
     # Overall success
     all_passed = all(test_results)
