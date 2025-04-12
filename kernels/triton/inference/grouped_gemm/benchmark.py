@@ -10,6 +10,7 @@ from typing import Tuple
 import deep_gemm
 from deep_gemm import bench_kineto, calc_diff, ceil_div, get_col_major_tma_aligned_tensor
 from persistent_kernel_fp8 import grouped_gemm_fp8_rowwise_persistent
+from persistent_kernel_fp8_tma import grouped_gemm_fp8_rowwise_persistent as grouped_gemm_fp8_rowwise_persistent_tma
 
 def per_token_cast_to_fp8(x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
     assert x.dim() == 2 and x.size(1) % 128 == 0
@@ -126,6 +127,9 @@ def deep_gemm_func(x_fp8, y_fp8, out, m_indices):
 def triton_gemm_func(a_fp8, b_fp8, expert_indices, a_scale, b_scale):
     return grouped_gemm_fp8_rowwise_persistent(a_fp8, b_fp8, expert_indices, a_scale, b_scale)
 
+def triton_tma_gemm_func(a_fp8, b_fp8, expert_indices, a_scale, b_scale):
+    return grouped_gemm_fp8_rowwise_persistent_tma(a_fp8, b_fp8, expert_indices, a_scale, b_scale)
+
 
 num_threads = torch.get_num_threads()
 print(f'Benchmarking on {num_threads} threads')
@@ -161,6 +165,15 @@ for num_groups, m, k, n in ((4, 8192, 7168, 4096), (4, 8192, 2048, 7168), (8, 40
         label=label,
         sub_label=sub_label,
         description='Triton FP8 Group GEMM').blocked_autorange(min_run_time=1))
+    
+    results.append(benchmark.Timer(
+        stmt='triton_tma_gemm_func(a, b, expert_indices, a_scale, b_scale)',
+        setup='from __main__ import triton_tma_gemm_func',
+        globals={'a': a_fp8, 'b' : b_fp8, 'expert_indices': expert_indices, 'a_scale' : a_scale, 'b_scale' : b_scale},
+        num_threads=num_threads,
+        label=label,
+        sub_label=sub_label,
+        description='Triton TMA FP8 Group GEMM').blocked_autorange(min_run_time=1))
     
     
 compare = benchmark.Compare(results)

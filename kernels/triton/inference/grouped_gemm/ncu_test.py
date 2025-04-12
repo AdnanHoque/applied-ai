@@ -2,7 +2,7 @@ from typing import Tuple
 import torch
 import triton
 import deep_gemm
-from persistent_kernel_fp8_no_autotune import grouped_gemm_fp8_rowwise_persistent
+from persistent_kernel_fp8_tma_ws import grouped_gemm_fp8_rowwise_persistent
 
 
 

@@ -22,7 +22,7 @@ def _compute_pid(tile_id, num_pid_in_group, num_pid_m, super_group_m):
 
 
 @triton.autotune(
-    configs=STANDARD_CONFIGS,
+    configs=WS_CONFIGS,
     key=["M_TOTAL", "N", "K"],
     prune_configs_by={"early_config_prune": early_config_prune},
 )
@@ -49,7 +49,7 @@ def _kernel_grouped_gemm_persistent_fp8_rowwise(
     BLOCK_SIZE_K: tl.constexpr,
     NUM_SMS: tl.constexpr,
     TMA_SIZE: tl.constexpr,
-    # NUM_CONSUMER_GROUPS: tl.constexpr,
+    NUM_CONSUMER_GROUPS: tl.constexpr,
     # Group size (for aligned loads)
     GROUP_SIZE_M: tl.constexpr = 128,
     SUPER_GROUP_M: tl.constexpr = 32, # 32 works best
@@ -117,7 +117,7 @@ def _kernel_grouped_gemm_persistent_fp8_rowwise(
                     )
 
                     # Accumulate matrix multiplication for this K tile
-                    accumulator = tl.dot(a, b.T, accumulator) # USE FAST_ACCUM
+                    accumulator += tl.dot(a, b.T) 
                 
                 tile_id_c += NUM_SMS
                 tile_m_idx, tile_n_idx = _compute_pid(tile_id_c, num_pid_in_group, num_pid_m, SUPER_GROUP_M)
@@ -238,7 +238,7 @@ def _grouped_gemm_persistent(
             x.data_ptr(),
             M_total,
             K,
-            META["BLOCK_SIZE_M"],
+            META["BLOCK_SIZE_M"] // META["NUM_CONSUMER_GROUPS"],
             META["BLOCK_SIZE_K"],
             x.element_size(),
         )
@@ -268,7 +268,7 @@ def _grouped_gemm_persistent(
             c.data_ptr(),
             M_total,
             N,
-            META["BLOCK_SIZE_M"],
+            META["BLOCK_SIZE_M"] // META["NUM_CONSUMER_GROUPS"],
             META["BLOCK_SIZE_N"],
             c.element_size(),
         )
