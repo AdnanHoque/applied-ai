@@ -1,7 +1,7 @@
 import triton
 import triton.language as tl
 import torch
-from tma_cuda_autotune import CudaUtils, early_config_prune, HOPPER_CONFIGS, STANDARD_CONFIGS, WS_CONFIGS
+from tma_cuda_autotune import CudaUtils, early_config_prune, HOPPER_CONFIGS, STANDARD_CONFIGS, WS_CONFIGS, _NV_WS_CONFIGS
 
 from tma_autotune import (
     ALIGN_SIZE_M,
@@ -22,7 +22,7 @@ def _compute_pid(tile_id, num_pid_in_group, num_pid_m, super_group_m):
 
 
 @triton.autotune(
-    configs=WS_CONFIGS,
+    configs=_NV_WS_CONFIGS,
     key=["M_TOTAL", "N", "K"],
     prune_configs_by={"early_config_prune": early_config_prune},
 )
@@ -100,54 +100,64 @@ def _kernel_grouped_gemm_persistent_fp8_rowwise(
 
                     k_offset = ki * BLOCK_SIZE_K
 
-                    # Load activations (A) with TMA
-                    a = tl._experimental_descriptor_load(
-                         a_desc_ptr,
-                         [m_start, k_offset],
-                         [BLOCK_SIZE_M, BLOCK_SIZE_K],
-                         tl.float8e4nv
-                    )
 
-                    # Load expert weights (B) for the expert assigned to this block
-                    b = tl._experimental_descriptor_load(
-                         b_desc_ptr_tile,
-                         [0, k_offset],
-                         [BLOCK_SIZE_N, BLOCK_SIZE_K],
-                         tl.float8e4nv,
-                    )
+                    with tl.async_task([0]):
+                            
+                        # Load activations (A) with TMA
+                        a = tl._experimental_descriptor_load(
+                            a_desc_ptr,
+                            [m_start, k_offset],
+                            [BLOCK_SIZE_M, BLOCK_SIZE_K],
+                            tl.float8e4nv
+                        )
 
-                    # Accumulate matrix multiplication for this K tile
-                    accumulator += tl.dot(a, b.T) 
+                        # Load expert weights (B) for the expert assigned to this block
+                        b = tl._experimental_descriptor_load(
+                            b_desc_ptr_tile,
+                            [0, k_offset],
+                            [BLOCK_SIZE_N, BLOCK_SIZE_K],
+                            tl.float8e4nv,
+                        )
                 
-                tile_id_c += NUM_SMS
-                tile_m_idx, tile_n_idx = _compute_pid(tile_id_c, num_pid_in_group, num_pid_m, SUPER_GROUP_M)
+                    with tl.async_task([1, NUM_CONSUMER_GROUPS]):
 
-                m_start = (tile_m_idx * BLOCK_SIZE_M).to(tl.int32)
-                n_start = (tile_n_idx * BLOCK_SIZE_N).to(tl.int32)
+                        # Accumulate matrix multiplication for this K tile
+                        accumulator = tl.dot(a, b.T, accumulator) # USE FAST ACCUM
 
-                offs_m = m_start + tl.arange(0, BLOCK_SIZE_M)
-                offs_n = n_start + tl.arange(0, BLOCK_SIZE_N)
-
-                # Load x (A) scales (per-row)
-                a_scale_ptrs = a_scale_ptr + offs_m[:, None]
-                a_scale = tl.load(a_scale_ptrs, mask=offs_m[:, None] < M_TOTAL)
-
-                # Load x expert weights (B) scales (per-column)
-                # Determine the expert group index and load expert ID
-                group_idx = m_start // GROUP_SIZE_M
-                expert_idx = tl.load(indices_ptr + group_idx * GROUP_SIZE_M)
                 
-                b_scale_ptrs = b_scale_ptr + expert_idx * N + offs_n[None, :]
-                b_scale = tl.load(b_scale_ptrs,  mask=offs_n[None, :] < N)
-
-                c = accumulator.to(tl.float32) * a_scale * b_scale
+                with tl.async_task([1, NUM_CONSUMER_GROUPS]):
                 
-                # Store output (C) with TMA
-                tl._experimental_descriptor_store(
-                        c_desc_ptr,
-                        c.to(tl.bfloat16),
-                        [m_start, n_start],
-                    )
+                    tile_id_c += NUM_SMS
+                    tile_m_idx, tile_n_idx = _compute_pid(tile_id_c, num_pid_in_group, num_pid_m, SUPER_GROUP_M)
+
+                    m_start = (tile_m_idx * BLOCK_SIZE_M).to(tl.int32)
+                    n_start = (tile_n_idx * BLOCK_SIZE_N).to(tl.int32)
+
+                    offs_m = m_start + tl.arange(0, BLOCK_SIZE_M)
+                    offs_n = n_start + tl.arange(0, BLOCK_SIZE_N)
+
+                    # Load x (A) scales (per-row)
+                    a_scale_ptrs = a_scale_ptr + offs_m[:, None]
+                    a_scale = tl.load(a_scale_ptrs, mask=offs_m[:, None] < M_TOTAL)
+
+                    # Load x expert weights (B) scales (per-column)
+                    # Determine the expert group index and load expert ID
+                    group_idx = m_start // GROUP_SIZE_M
+                    expert_idx = tl.load(indices_ptr + group_idx * GROUP_SIZE_M)
+                    
+                    b_scale_ptrs = b_scale_ptr + expert_idx * N + offs_n[None, :]
+                    b_scale = tl.load(b_scale_ptrs,  mask=offs_n[None, :] < N)
+
+                    c = accumulator.to(tl.float32) * a_scale * b_scale
+                
+                with tl.async_task([1, NUM_CONSUMER_GROUPS]):
+                    
+                    # Store output (C) with TMA
+                    tl._experimental_descriptor_store(
+                            c_desc_ptr,
+                            accumulator.to(tl.bfloat16),
+                            [m_start, n_start],
+                        )
 
 # =============== Wrapper for FP8 GGEMM =================
 def _grouped_gemm_persistent(

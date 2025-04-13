@@ -282,6 +282,29 @@ WS_CONFIGS = [
     ),
 ]
 
+
+_NV_WS_CONFIGS = [
+    triton.Config(
+        {
+            "BLOCK_SIZE_M": block_size_m,
+            "BLOCK_SIZE_N": block_size_n,
+            "BLOCK_SIZE_K": block_size_k,
+            "NUM_CONSUMER_GROUPS": max(1, num_consumer_groups),
+        },
+        num_stages=num_stages,
+        num_warps=num_warps,
+        num_ctas=1,
+        num_consumer_groups=num_consumer_groups,
+        num_buffers_warp_spec=num_stages,
+    )
+    for block_size_m in [64, 128]
+    for block_size_n in [64, 128, 256]
+    for block_size_k in [64, 128, 256]
+    for num_stages in [2, 3, 4]
+    for num_warps in [4, 8]
+    for num_consumer_groups in [0, 2]
+]
+
 def early_config_prune(configs, args, **kwargs):
     """Filter out configurations that would exceed shared memory capacity."""
     k = kwargs.get("K", 0)
