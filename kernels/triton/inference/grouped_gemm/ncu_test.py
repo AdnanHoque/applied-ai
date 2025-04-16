@@ -101,6 +101,9 @@ def construct_grouped_deep_gemm(num_groups: int, m: int, k: int, n: int, is_mask
         Tuple[Tuple[torch.Tensor, torch.Tensor], Tuple[torch.Tensor, torch.Tensor], torch.Tensor, torch.Tensor]:
     x = torch.randn((num_groups, m, k), device='cuda', dtype=torch.bfloat16)
     y = torch.randn((num_groups, n, k), device='cuda', dtype=torch.bfloat16)
+
+    print(f"in construct fn {x.shape=}")
+
     out = torch.empty((num_groups, m, n), device='cuda', dtype=torch.bfloat16)
     ref_out = torch.einsum('gmk,gnk->gmn', x, y)
 
@@ -138,6 +141,12 @@ if __name__ == '__main__':
 
     # DeepGEMM Grouped GEMM
     x_fp8, y_fp8, out, ref_out = construct_grouped_deep_gemm(num_experts, m, k, n, is_masked=False)
+
+    print(f"Deepseek GEMM Shapes")
+    print(f"A: {x_fp8[0].shape}, A_scale: {x_fp8[1].shape}")
+    print(f"B: {y_fp8[0].shape}, B_scale: {y_fp8[1].shape}")
+    print(f"C: {out.shape}")
+
     m_indices = torch.arange(0, num_experts, device='cuda', dtype=torch.int)
     m_indices = m_indices.unsqueeze(-1).expand(num_experts, m).contiguous().view(-1)
     

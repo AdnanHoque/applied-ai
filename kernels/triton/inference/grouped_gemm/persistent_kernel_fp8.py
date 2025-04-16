@@ -104,7 +104,7 @@ def _kernel_grouped_gemm_persistent_fp8_rowwise(
                     b = tl.load(b_ptrs, mask=mask_b, other=0.0)
 
                     # Accumulate matrix multiplication for this K tile
-                    accumulator += tl.dot(a, b.T) # USE FAST ACCUM
+                    accumulator = tl.dot(a, b.T, accumulator) # USE FAST ACCUM
                 
                 tile_id_c += NUM_SMS
                 tile_m_idx, tile_n_idx = _compute_pid(tile_id_c, num_pid_in_group, num_pid_m, SUPER_GROUP_M)

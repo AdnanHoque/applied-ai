@@ -54,7 +54,6 @@ def construct_grouped_deep_gemm(num_groups: int, m: int, k: int, n: int, is_mask
 
 
 # Construct Triton Kernel prep data
-
 def construct_grouped_triton_gemm(
     M: int,
     K: int,

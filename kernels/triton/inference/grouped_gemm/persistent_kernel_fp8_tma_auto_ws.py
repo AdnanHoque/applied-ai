@@ -19,7 +19,7 @@ def _compute_pid(tile_id, num_pid_in_group, num_pid_m, super_group_m):
 
 
 @triton.autotune(
-    configs=STANDARD_CONFIGS,
+    configs=WS_CONFIGS,
     key=["M_TOTAL", "N", "K"],
     prune_configs_by={"early_config_prune": early_config_prune},
 )
@@ -46,7 +46,7 @@ def _kernel_grouped_gemm_persistent_fp8_rowwise(
     BLOCK_SIZE_K: tl.constexpr,
     NUM_SMS: tl.constexpr,
     TMA_SIZE: tl.constexpr,
-    # NUM_CONSUMER_GROUPS: tl.constexpr,
+    NUM_CONSUMER_GROUPS: tl.constexpr,
     # Group size (for aligned loads)
     GROUP_SIZE_M: tl.constexpr = 128,
     SUPER_GROUP_M: tl.constexpr = 32, # 32 works best
