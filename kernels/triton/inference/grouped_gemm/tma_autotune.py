@@ -236,5 +236,4 @@ def early_config_prune(configs, named_args, dtsize=None, dtype=None, **kwargs):
 
     return pruned_configs
 
-
 # ======== End Autotuning utilities ========

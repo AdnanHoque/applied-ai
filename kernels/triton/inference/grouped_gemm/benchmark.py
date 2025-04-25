@@ -116,7 +116,7 @@ def construct_grouped_triton_gemm(
         expert_idx = group_idx % num_experts
         expert_indices[start_idx:end_idx] = expert_idx
     
-
+    
     return inputs.to(torch.float8_e4m3fn), expert_weights.to(torch.float8_e4m3fn), expert_indices, a_scale, b_scale
 
 
